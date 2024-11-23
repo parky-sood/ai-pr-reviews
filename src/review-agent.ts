@@ -81,7 +81,9 @@ const filterFile = (file: PRFile) => {
   }
   const extension = splitFilename.pop()?.toLowerCase();
   if (extension && extensionsToIgnore.has(extension)) {
-    console.log(`Filtering out file with ignored extension: ${file.filename} (.${extension})`);
+    console.log(
+      `Filtering out file with ignored extension: ${file.filename} (.${extension})`
+    );
     return false;
   }
   return true;
@@ -162,6 +164,46 @@ const stripRemovedLines = (originalFile: PRFile) => {
   return { ...originalFile, patch: strippedPatch };
 };
 
+const chunkLargeFiles = (
+  files: PRFile[],
+  patchBuilder: (file: PRFile) => string,
+  convoBuilder: (diff: string) => ChatCompletionMessageParam[]
+): PRFile[][] => {
+  const chunkedGroups: PRFile[][] = [];
+
+  files.forEach((file) => {
+    const patch = patchBuilder(file);
+    const lines = patch.split("\n");
+    const maxLinesPerChunk = 100; // Adjust based on token limits
+    const fileChunks: PRFile[] = [];
+
+    // Split file patch into chunks of maxLinesPerChunk
+    for (let i = 0; i < lines.length; i += maxLinesPerChunk) {
+      const chunkLines = lines.slice(i, i + maxLinesPerChunk);
+      const chunkPatch = chunkLines.join("\n");
+      const chunkFile: PRFile = { ...file, patch: chunkPatch };
+      fileChunks.push(chunkFile);
+    }
+
+    // Validate if each chunk is within token limits
+    fileChunks.forEach((chunk) => {
+      const isChunkWithinLimit = isConversationWithinLimit(
+        constructPrompt([chunk], patchBuilder, convoBuilder)
+      );
+      if (isChunkWithinLimit) {
+        chunkedGroups.push([chunk]);
+      } else {
+        console.warn(
+          `Chunk still exceeds token limits: ${file.filename}. This may need further adjustment.`
+        );
+      }
+    });
+  });
+
+  return chunkedGroups;
+};
+
+// Updated processOutsideLimitFiles to handle chunking
 const processOutsideLimitFiles = (
   files: PRFile[],
   patchBuilder: (file: PRFile) => string,
@@ -171,15 +213,18 @@ const processOutsideLimitFiles = (
   if (files.length == 0) {
     return processGroups;
   }
+
   files = files.map((file) => stripRemovedLines(file));
   const convoWithinModelLimit = isConversationWithinLimit(
     constructPrompt(files, patchBuilder, convoBuilder)
   );
+
   if (convoWithinModelLimit) {
     processGroups.push(files);
   } else {
     const exceedingLimits: PRFile[] = [];
     const withinLimits: PRFile[] = [];
+
     files.forEach((file) => {
       const isFileConvoWithinLimits = isConversationWithinLimit(
         constructPrompt([file], patchBuilder, convoBuilder)
@@ -190,6 +235,7 @@ const processOutsideLimitFiles = (
         exceedingLimits.push(file);
       }
     });
+
     const withinLimitsGroup = processWithinLimitFiles(
       withinLimits,
       patchBuilder,
@@ -198,11 +244,18 @@ const processOutsideLimitFiles = (
     withinLimitsGroup.forEach((group) => {
       processGroups.push(group);
     });
+
     if (exceedingLimits.length > 0) {
-      console.log("TODO: Need to further chunk large file changes.");
-      // throw "Unimplemented"
+      console.log("Chunking files that exceed token limits.");
+      const chunkedGroups = chunkLargeFiles(
+        exceedingLimits,
+        patchBuilder,
+        convoBuilder
+      );
+      chunkedGroups.forEach((group) => processGroups.push(group));
     }
   }
+
   return processGroups;
 };
 
@@ -517,7 +570,9 @@ export const processPullRequest = async (
   const filteredFiles = files.filter((file) => filterFile(file));
   console.dir({ filteredFiles }, { depth: null });
   if (filteredFiles.length == 0) {
-    console.log("Nothing to comment on, all files were filtered out. The PR Agent does not support the following file types: pdf, png, jpg, jpeg, gif, mp4, mp3, md, json, env, toml, svg, package-lock.json, yarn.lock, .gitignore, package.json, tsconfig.json, poetry.lock, readme.md");
+    console.log(
+      "Nothing to comment on, all files were filtered out. The PR Agent does not support the following file types: pdf, png, jpg, jpeg, gif, mp4, mp3, md, json, env, toml, svg, package-lock.json, yarn.lock, .gitignore, package.json, tsconfig.json, poetry.lock, readme.md"
+    );
     return {
       review: null,
       suggestions: [],
