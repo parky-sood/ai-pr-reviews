@@ -2,6 +2,8 @@ import { AbstractParser, EnclosingContext } from "../../constants";
 import * as parser from "@babel/parser";
 import traverse, { NodePath, Node } from "@babel/traverse";
 
+// adding testing comment for JS parser
+
 const processNode = (
   path: NodePath<Node>,
   lineStart: number,
